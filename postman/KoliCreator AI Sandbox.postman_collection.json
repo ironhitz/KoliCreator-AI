@@ -1,0 +1,93 @@
+{
+  "info": {
+    "name": "KoliCreator AI - PayPal Sandbox",
+    "description": "Repeatable checkout workflow. Create an order, open approvalUrl in a browser and approve using a PayPal sandbox buyer, then call Capture. Capture is idempotent if the return page already completed it. No real payments.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000" },
+    { "key": "creatorUsername", "value": "replace_with_store_username" },
+    { "key": "productId", "value": "replace_with_published_product_uuid" },
+    { "key": "tipAmountCents", "value": "500" },
+    { "key": "checkoutId", "value": "" },
+    { "key": "paypalOrderId", "value": "" },
+    { "key": "approvalUrl", "value": "" },
+    { "key": "supabaseAccessToken", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. Create product order",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"username\": \"{{creatorUsername}}\",\n  \"productId\": \"{{productId}}\"\n}", "options": { "raw": { "language": "json" } } },
+        "url": "{{baseUrl}}/api/paypal/orders"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "pm.test('Order created with PayPal approval link', function () { pm.response.to.have.status(200); });",
+            "if (pm.response.code === 200) { const body = pm.response.json(); pm.collectionVariables.set('checkoutId', body.checkoutId); pm.collectionVariables.set('paypalOrderId', body.paypalOrderId); pm.collectionVariables.set('approvalUrl', body.approvalUrl); }"
+          ]
+        }
+      }]
+    },
+    {
+      "name": "2. Create tip order (optional)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"username\": \"{{creatorUsername}}\",\n  \"tipAmountCents\": {{tipAmountCents}}\n}", "options": { "raw": { "language": "json" } } },
+        "url": "{{baseUrl}}/api/paypal/orders"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "pm.test('Tip order created with PayPal approval link', function () { pm.response.to.have.status(200); });",
+            "if (pm.response.code === 200) { const body = pm.response.json(); pm.collectionVariables.set('checkoutId', body.checkoutId); pm.collectionVariables.set('paypalOrderId', body.paypalOrderId); pm.collectionVariables.set('approvalUrl', body.approvalUrl); }"
+          ]
+        }
+      }]
+    },
+    {
+      "name": "3. Capture approved order",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"checkoutId\": \"{{checkoutId}}\",\n  \"paypalOrderId\": \"{{paypalOrderId}}\"\n}", "options": { "raw": { "language": "json" } } },
+        "url": "{{baseUrl}}/api/paypal/capture"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "pm.test('Only server-confirmed capture succeeds', function () { pm.response.to.have.status(200); });",
+            "pm.test('Capture is completed', function () { pm.expect(pm.response.json().status).to.eql('COMPLETED'); });"
+          ]
+        }
+      }]
+    },
+    {
+      "name": "4. Generate revenue plan (signed-in creator)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{supabaseAccessToken}}" }],
+        "body": { "mode": "raw", "raw": "{\n  \"audienceSize\": 12000,\n  \"monthlyViews\": 45000,\n  \"currentMonthlyRevenueCents\": 25000,\n  \"monthlyTargetCents\": 250000,\n  \"existingProducts\": \"A short video editing guide\"\n}", "options": { "raw": { "language": "json" } } },
+        "url": "{{baseUrl}}/api/ai/plan"
+      }
+    },
+    {
+      "name": "5. Generate transaction insight (signed-in creator)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Authorization", "value": "Bearer {{supabaseAccessToken}}" }],
+        "url": "{{baseUrl}}/api/ai/insights"
+      }
+    }
+  ]
+}
