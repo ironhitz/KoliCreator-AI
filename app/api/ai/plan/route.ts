@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getRequestUser } from "@/lib/auth";
 import { allowRequest, writeAudit } from "@/lib/rate-limit";
 import { getVerifiedCreatorLearningContext } from "@/lib/ai-learning";
+import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 const inputSchema = z.object({
   audienceSize: z.number().int().min(0).max(1000000000),
@@ -58,8 +59,15 @@ export async function POST(request: Request) {
       requiredSales: Math.ceil(revenueGapCents / idea.recommendedPriceCents),
       targetGapCents: revenueGapCents,
     }));
-    await writeAudit("ai.plan.generated", { creatorId: user.id, productIdeaCount: productIdeas.length, verifiedTransactionCount: learningContext.verifiedTransactionCount });
-    return NextResponse.json({ ...plan, productIdeas, revenueGapCents, currency: "USD", generatedAt: new Date().toISOString(), learningWindow: learningContext.reportingWindow, verifiedTransactionCount: learningContext.verifiedTransactionCount });
+    const resultPlan = { ...plan, productIdeas, revenueGapCents, currency: "USD", generatedAt: new Date().toISOString(), learningWindow: learningContext.reportingWindow, verifiedTransactionCount: learningContext.verifiedTransactionCount };
+    const { data: savedPlan, error: saveError } = await getSupabaseAdmin()
+      .from("creator_ai_plans")
+      .insert({ creator_id: user.id, metrics: parsed.data, result: resultPlan, status: "draft" })
+      .select("id,created_at")
+      .single();
+    if (saveError || !savedPlan) throw new Error("Could not save the generated plan.");
+    await writeAudit("ai.plan.generated", { creatorId: user.id, planId: savedPlan.id, productIdeaCount: productIdeas.length, verifiedTransactionCount: learningContext.verifiedTransactionCount });
+    return NextResponse.json({ ...resultPlan, id: savedPlan.id, status: "draft", createdAt: savedPlan.created_at });
   } catch (error) {
     console.error("AI plan generation failed", error);
     return NextResponse.json({ error: "The Revenue Agent could not generate a valid plan. Please try again." }, { status: 502 });

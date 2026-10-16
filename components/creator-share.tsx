@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
-import QRCode from "qrcode";
 import { Check, Copy, Download, QrCode, Share2 } from "lucide-react";
 
 type Props = { path: string; username: string; compact?: boolean };
@@ -17,7 +16,7 @@ export function CreatorShare({ path, username, compact = false }: Props) {
     const publicUrl = new URL(path, window.location.origin).toString();
     let active = true;
     setUrl(publicUrl);
-    QRCode.toDataURL(publicUrl, { width: 320, margin: 2, errorCorrectionLevel: "H" })
+    import("qrcode").then(({ default: QRCode }) => QRCode.toDataURL(publicUrl, { width: 320, margin: 2, errorCorrectionLevel: "H" }))
       .then((image) => {
         if (active) setQrImage(image);
       })

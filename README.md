@@ -8,10 +8,11 @@ KoliCreator AI is a mobile-first creator storefront and monetisation workspace. 
 
 - Supabase email/password sign-up and sign-in; creator profiles are created by a database trigger.
 - Public creator URLs at `/creator/{username}`, published products, optional public cover images in Supabase Storage, and fixed tip options.
+- Private digital product files for PDF, EPUB, ZIP, MP3, M4A and MP4 offers; verified buyers receive expiring signed downloads after capture confirmation.
 - PayPal Orders v2 order creation on the server, buyer approval at PayPal, server-side capture, order/amount/currency verification, and idempotent capture records.
 - PayPal webhook signature verification, duplicate event handling, and completed/partial/full refund tracking.
 - RLS-protected creator product and transaction access, database-backed API rate limits, and basic audit records.
-- Verified revenue summaries with configurable estimated fees, date and offer filters, product performance, and a filterable/sortable AG Grid Community transaction table.
+- Verified revenue summaries with configurable estimated fees, date and offer filters, product performance, and server-paginated AG Grid Community transaction details.
 - Authenticated server-side AI revenue plans, deterministic target-gap sales arithmetic, editable product suggestions, launch steps, campaign drafts, and transaction insights.
 - Responsive dashboard, storefront, sign-in, checkout-return and cancellation screens.
 - Creator social profile links on public pages and a downloadable QR/share card for cross-platform sharing; creators keep publishing and managing their audiences on the external platforms.
@@ -34,7 +35,7 @@ The AI revenue planner and transaction insight use the creator's verified sales,
 Prerequisites: Node.js 22 and npm.
 
 1. Create a Supabase project.
-2. Apply the SQL files in [`supabase/migrations/`](supabase/migrations/) in filename order, using the Supabase SQL Editor or Supabase CLI. The initial migration creates the tables, RLS policies, profile trigger, rate-limit function, storage bucket and storage policies; later migrations add the service-role-only AI learning aggregate and creator social-profile links.
+2. Apply the SQL files in [`supabase/migrations/`](supabase/migrations/) in filename order, using the Supabase SQL Editor or Supabase CLI. The initial migration creates the tables, RLS policies, profile trigger, rate-limit function, storage bucket and storage policies; later migrations add the service-role-only AI learning aggregate, creator social-profile links, database security hardening, private digital-product delivery, saved Revenue Agent plans, and transaction analytics. Before applying `202610160004_database_security_hardening.sql`, `202610160005_digital_product_delivery.sql`, `202610160006_creator_ai_plans.sql`, or `202610160007_transaction_analytics.sql` to an existing project, take a database backup and review the policies they replace or add. These later migrations are provided for manual application and have not been run against a live Supabase project.
 3. Create `.env.local` using the variable names in the [Environment variables](#environment-variables) table. Keep the service-role key server-side; local environment files are ignored by Git and must never be committed.
 4. Create PayPal sandbox REST app credentials and set `PAYPAL_ENV=sandbox`, `PAYPAL_CLIENT_ID`, and `PAYPAL_CLIENT_SECRET`. Do not use live credentials.
 5. Set `OPENAI_API_KEY` for AI routes. The dashboard and payment routes can be explored without AI, but generation returns a setup error until the key is configured.
@@ -65,7 +66,7 @@ For a repeatable demo, create one creator test account and one PayPal sandbox bu
 | `OPENAI_MODEL` | Model name; defaults to `gpt-4o-mini` | Server only |
 | `NEXT_PUBLIC_PLATFORM_FEE_RATE` | Planning-only fee assumption; defaults to `0.05` | Browser-visible assumption |
 
-The public fee rate is an estimate, not PayPal's actual processing fee or a creator payout calculation. The current offer creator UI prices in USD.
+The public fee rate is an estimate, not PayPal's actual processing fee or a creator payout calculation. New offers can be priced in USD, EUR, GBP, CAD, or AUD. Revenue Agent inputs and its target-gap arithmetic remain USD-based; dashboard totals keep currencies separate rather than converting them.
 
 Social links are public profile URLs only: no social-platform OAuth, audience import, analytics sync, or automatic publishing is performed. The creator page and its QR code are designed to be shared from social bios, posts, messages, or printed materials while creators continue using their existing platforms.
 
@@ -91,10 +92,11 @@ Render was selected as the requested hosting target, but this workspace has not 
 ```bash
 npm run typecheck
 npm run lint
+npm test
 npm run build
 ```
 
-There is no automated unit/integration test suite yet. End-to-end PayPal testing requires the external sandbox setup above.
+The unit suite covers payment capture validation, digital delivery eligibility, currency aggregation, and money formatting. End-to-end PayPal, Storage, and webhook testing still requires the external sandbox setup above.
 
 ## Sponsor tools: actual status
 
@@ -115,6 +117,8 @@ The YouTube demo video is also an external deliverable and has not been recorded
 - Capture IDs, checkout IDs, refund IDs and webhook event IDs are unique in the database. PayPal request IDs are deterministic per checkout.
 - Webhook signatures are verified using PayPal's verification API. Creator product and payment records are protected by RLS; server routes use the service role only after validating the request/user or PayPal event.
 - The app does not collect or store card credentials. Rate limits are database-backed; audit logs contain event metadata, not secrets.
+- The later database-hardening migration explicitly separates API grants from row-level policies, removes unexpected legacy policies on KoliCreator application tables, restricts profile updates to public profile fields, limits product image size/types in Storage, and keeps payment/refund/audit/rate-limit data unavailable to anonymous and authenticated table access except for creator-owned read policies.
+- Default privileges for objects created by the `postgres` role in `public` are tightened. Future tables, sequences, and RPC functions must receive deliberate grants and RLS policies; do not assume an unreviewed migration is safely exposed to API roles.
 - Sandbox captures are clearly labeled. The configurable fee estimate is not a PayPal fee, actual balance, or payout. There are no live payments, subscriptions, creator payouts, tax calculations, chargeback workflows, or production fulfilment guarantees.
 
 ## Hackathon submission summary

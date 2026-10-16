@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { paypalRequest, type PayPalOrder } from "@/lib/paypal";
 import { allowRequest, writeAudit } from "@/lib/rate-limit";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
+import { hashDeliveryToken } from "@/lib/delivery";
 
 const inputSchema = z.object({
   username: z.string().regex(/^[a-z0-9_]{3,30}$/),
@@ -26,15 +28,17 @@ export async function POST(request: Request) {
     const { data: profile } = await admin.from("profiles").select("id,username").eq("username", parsed.data.username).maybeSingle();
     if (!profile) return NextResponse.json({ error: "Creator storefront not found." }, { status: 404 });
 
-    let product: { id: string; title: string; price_cents: number; currency: string } | null = null;
+    let product: { id: string; title: string; price_cents: number; currency: string; delivery_file_path: string | null } | null = null;
     if (parsed.data.productId) {
-      const { data } = await admin.from("products").select("id,title,price_cents,currency").eq("id", parsed.data.productId).eq("creator_id", profile.id).eq("is_published", true).maybeSingle();
+      const { data } = await admin.from("products").select("id,title,price_cents,currency,delivery_file_path").eq("id", parsed.data.productId).eq("creator_id", profile.id).eq("is_published", true).maybeSingle();
       if (!data) return NextResponse.json({ error: "This offer is not available." }, { status: 404 });
+      if (!data.delivery_file_path) return NextResponse.json({ error: "This offer is not ready for digital delivery." }, { status: 409 });
       product = data;
     }
     const amountCents = product?.price_cents ?? parsed.data.tipAmountCents!;
     const currency = product?.currency ?? "USD";
     checkoutId = crypto.randomUUID();
+    const deliveryToken = product ? randomBytes(32).toString("base64url") : null;
     const { error: insertError } = await admin.from("checkout_orders").insert({
       id: checkoutId,
       creator_id: profile.id,
@@ -45,6 +49,15 @@ export async function POST(request: Request) {
       status: "CREATING",
     });
     if (insertError) throw new Error("Could not start checkout.");
+
+    if (deliveryToken) {
+      const { error: accessError } = await admin.from("product_delivery_access").insert({
+        checkout_id: checkoutId,
+        token_hash: hashDeliveryToken(deliveryToken),
+        expires_at: new Date(Date.now() + 30 * 86400000).toISOString(),
+      });
+      if (accessError) throw new Error("Could not prepare secure product delivery.");
+    }
 
     const amount = (amountCents / 100).toFixed(2);
     const paypalOrder = await paypalRequest<PayPalOrder>("/v2/checkout/orders", {
@@ -61,8 +74,8 @@ export async function POST(request: Request) {
         application_context: {
           brand_name: "KoliCreator",
           user_action: "PAY_NOW",
-          return_url: `${new URL(request.url).origin}/checkout/return?checkoutId=${checkoutId}`,
-          cancel_url: `${new URL(request.url).origin}/checkout/cancel?checkoutId=${checkoutId}`,
+          return_url: `${new URL(request.url).origin}/checkout/return?checkoutId=${checkoutId}&username=${encodeURIComponent(profile.username)}${deliveryToken ? `&deliveryToken=${encodeURIComponent(deliveryToken)}` : ""}`,
+          cancel_url: `${new URL(request.url).origin}/checkout/cancel?checkoutId=${checkoutId}&username=${encodeURIComponent(profile.username)}`,
         },
       }),
     });

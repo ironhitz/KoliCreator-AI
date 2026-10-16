@@ -3,6 +3,7 @@ import { z } from "zod";
 import { paypalRequest, type PayPalOrder } from "@/lib/paypal";
 import { allowRequest, writeAudit } from "@/lib/rate-limit";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
+import { validatePayPalCapture } from "@/lib/payment-validation";
 
 const inputSchema = z.object({ checkoutId: z.string().uuid(), paypalOrderId: z.string().min(8).max(40) });
 
@@ -31,25 +32,28 @@ export async function POST(request: Request) {
       headers: { "PayPal-Request-Id": `capture-${checkout.id}` },
       body: "{}",
     });
-    const purchaseUnit = order.purchase_units?.[0];
-    const capture = purchaseUnit?.payments?.captures?.[0];
-    if (order.id !== checkout.paypal_order_id || purchaseUnit?.custom_id !== checkout.id || order.status !== "COMPLETED" || capture?.status !== "COMPLETED") {
-      return NextResponse.json({ error: "PayPal has not confirmed a completed capture." }, { status: 409 });
+    const validation = validatePayPalCapture(order, {
+      paypalOrderId: checkout.paypal_order_id,
+      checkoutId: checkout.id,
+      amountCents: checkout.expected_amount_cents,
+      currency: checkout.currency,
+    });
+    if (!validation.ok) {
+      if (validation.error === "Captured amount does not match the offer.") {
+        await writeAudit("paypal.capture.mismatch", { checkoutId: checkout.id, expectedCents: checkout.expected_amount_cents, currency: checkout.currency });
+      }
+      return NextResponse.json({ error: validation.error }, { status: 409 });
     }
-    const capturedCents = Math.round(Number(capture.amount.value) * 100);
-    if (capturedCents !== checkout.expected_amount_cents || capture.amount.currency_code !== checkout.currency) {
-      await writeAudit("paypal.capture.mismatch", { checkoutId: checkout.id, capturedCents, expectedCents: checkout.expected_amount_cents, currency: capture.amount.currency_code });
-      return NextResponse.json({ error: "Captured amount does not match the offer." }, { status: 409 });
-    }
+    const { captureId, capturedCents, currency } = validation;
     const capturedAt = new Date().toISOString();
     const { error: transactionError } = await admin.from("payment_transactions").upsert({
       checkout_id: checkout.id,
       creator_id: checkout.creator_id,
       product_id: checkout.product_id,
       paypal_order_id: order.id,
-      paypal_capture_id: capture.id,
+      paypal_capture_id: captureId,
       amount_cents: capturedCents,
-      currency: capture.amount.currency_code,
+      currency,
       status: "COMPLETED",
       source: "paypal_sandbox",
       captured_at: capturedAt,
@@ -57,8 +61,8 @@ export async function POST(request: Request) {
     if (transactionError) throw new Error("Could not record the verified payment.");
     const { error: checkoutError } = await admin.from("checkout_orders").update({ status: "CAPTURED", captured_at: capturedAt, updated_at: capturedAt }).eq("id", checkout.id);
     if (checkoutError) throw new Error("Could not update checkout status.");
-    await writeAudit("paypal.capture.completed", { checkoutId: checkout.id, paypalOrderId: order.id, paypalCaptureId: capture.id, amountCents: capturedCents });
-    return NextResponse.json({ status: "COMPLETED", transaction: { amount_cents: capturedCents, currency: capture.amount.currency_code, captured_at: capturedAt } });
+    await writeAudit("paypal.capture.completed", { checkoutId: checkout.id, paypalOrderId: order.id, paypalCaptureId: captureId, amountCents: capturedCents });
+    return NextResponse.json({ status: "COMPLETED", transaction: { amount_cents: capturedCents, currency, captured_at: capturedAt } });
   } catch (error) {
     console.error("PayPal capture failed", error);
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to verify PayPal payment." }, { status: 502 });
